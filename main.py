@@ -12,6 +12,39 @@ if not HOLODEX_API_KEY:
 hololyzer_url = "https://hololyzer.net"
 holodex_api_url = "https://holodex.net/api/v2"
 
+# Single source of truth for CSV field order and default keys.
+FIELDS = [
+    'video_id',
+    'video_title',
+    'holodex_topic_id',
+    'holodex_published_at',
+    'holodex_available_at',
+    'public_time',
+    'start_time',
+    'end_time',
+    'total_time',
+    'chat_num_total',
+    'chat_num_ja',
+    'chat_num_emoji',
+    'chat_num_en',
+    'uniq_user_num',
+    'uniq_member_num',
+    'total_super_chat_amount_yen',
+    'english_chat_ratio',
+    'member_chat_ratio',
+    'chat_per_second',
+    'max_ccv',
+    'member_num',
+    'member_gift_num_from',
+    'member_gift_num_to',
+    'milestone_num',
+    'channel_id',
+    'channel_en_name',
+    'channel_ja_name',
+    'channel_en_category',
+    'channel_ja_category',
+]
+
 response_string_en = requests.get(hololyzer_url + "/youtube/locales/string_en.json")
 response_string_en.raise_for_status()
 response_string_en.encoding = "utf-8"
@@ -57,32 +90,18 @@ def channels():
 
     return channels
 
-def get_video_data(video_id):
-    data = {
-        'video_id': video_id,
-        'public_time': '',
-        'start_time': '',
-        'end_time': '',
-        'total_time': '',
-        'chat_num_total': '',
-        'chat_num_ja': '',
-        'chat_num_emoji': '',
-        'chat_num_en': '',
-        'uniq_user_num': '',
-        'uniq_member_num': '',
-        'total_super_chat_amount_yen': '',
-        'english_chat_ratio': '',
-        'member_chat_ratio': '',
-        'chat_per_second': '',
-        'max_ccv': '',
-        'member_num': '',
-        'member_gift_num_from': '',
-        'member_gift_num_to': '',
-        'milestone_num': ''
-    }
+def get_video_data(holodex_info):
+    # initialize all expected fields with empty defaults from FIELDS
+    data = {k: '' for k in FIELDS}
+    # fill holodex-provided metadata
+    data['video_id'] = holodex_info.get('id', '')
+    data['video_title'] = holodex_info.get('title', '')
+    data['holodex_topic_id'] = holodex_info.get('topic_id', '')
+    data['holodex_published_at'] = holodex_info.get('published_at', '')
+    data['holodex_available_at'] = holodex_info.get('available_at', '')
 
     try:
-        response = requests.get(f"{hololyzer_url}/youtube/video/{video_id}.html")
+        response = requests.get(f"{hololyzer_url}/youtube/video/{holodex_info['id']}.html")
         response.raise_for_status()
 
     except requests.exceptions.HTTPError as error:
@@ -179,14 +198,14 @@ def videos_with_data(channel, csv_writer, fieldnames, existing_ids=None):
 
     csv_writer is expected to be a csv.DictWriter already configured with fieldnames.
     """
-    video_ids = []
+    videos_result = []
 
-    print(f"Fetching video ids from Holodex for channel", channel['en_name'], channel['id'])
+    print(f"Fetching video info from Holodex for channel", channel['en_name'], channel['id'])
     while (True):
         params = {
             "type": "stream",
             "limit": 50,
-            "offset": len(video_ids)
+            "offset": len(videos_result),
         }
 
         headers = { "X-APIKEY": HOLODEX_API_KEY }
@@ -195,26 +214,34 @@ def videos_with_data(channel, csv_writer, fieldnames, existing_ids=None):
         response.raise_for_status()
         response.encoding = "utf-8"
 
-        holodex_videos = response.json()
+        holodex_video_info_response = response.json()
 
-        for holodex_video in holodex_videos:
-            video_ids.append(holodex_video['id'])
+        for holodex_video in holodex_video_info_response:
+            videos_result.append({
+                'id': holodex_video['id'],
+                'title': holodex_video['title'],
+                # topic_id, published_at, available_at may be missing for some videos
+                'topic_id': holodex_video['topic_id'] if 'topic_id' in holodex_video else None,
+                'published_at': holodex_video['published_at'] if 'published_at' in holodex_video else None,
+                'available_at': holodex_video['available_at'] if 'available_at' in holodex_video else None,
+            })
+            
 
-        if len(holodex_videos) < 50:
-            print(f"Fetched {len(video_ids)} video ids from Holodex for channel", channel['en_name'], channel['id'])
+        if len(holodex_video_info_response) < 50:
+            print(f"Fetched {len(videos_result)} video info from Holodex for channel", channel['en_name'], channel['id'])
             break
 
     existing_ids = existing_ids or set()
 
-    total = len(video_ids)
-    for idx, video_id in enumerate(video_ids, start=1):
-        if video_id in existing_ids:
+    total = len(videos_result)
+    for idx, holodex_info in enumerate(videos_result, start=1):
+        if holodex_info['id'] in existing_ids:
             # already present in CSV, skip
-            print(f"[{idx}/{total}] Channel: {channel['en_name']} ({channel['id']}) - Video: {video_id} - Skipped (already present)")
+            print(f"[{idx}/{total}] Channel: {channel['en_name']} ({channel['id']}) - Video: {holodex_info['id']} - Skipped (already present)")
             continue
         # fetch and build complete data
         complete_data = {
-            **get_video_data(video_id),
+            **get_video_data(holodex_info),
             'channel_id': channel['id'],
             'channel_en_name': channel['en_name'],
             'channel_ja_name': channel['ja_name'],
@@ -226,41 +253,11 @@ def videos_with_data(channel, csv_writer, fieldnames, existing_ids=None):
         row = { name: complete_data.get(name) for name in fieldnames }
 
         # print channel and id to show progress with counter
-        print(f"[{idx}/{total}] Channel: {channel['en_name']} ({channel['id']}) - Video: {video_id} - Wrote to CSV")
+        print(f"[{idx}/{total}] Channel: {channel['en_name']} ({channel['id']}) - Video: {holodex_info['id']} - Wrote to CSV")
 
         csv_writer.writerow(row)
 
     # no return; streaming to CSV
-
-
-def get_fieldnames():
-    return [
-        'video_id',
-        'public_time',
-        'start_time',
-        'end_time',
-        'total_time',
-        'chat_num_total',
-        'chat_num_ja',
-        'chat_num_emoji',
-        'chat_num_en',
-        'uniq_user_num',
-        'uniq_member_num',
-        'total_super_chat_amount_yen',
-        'english_chat_ratio',
-        'member_chat_ratio',
-        'chat_per_second',
-        'max_ccv',
-        'member_num',
-        'member_gift_num_from',
-        'member_gift_num_to',
-        'milestone_num',
-        'channel_id',
-        'channel_en_name',
-        'channel_ja_name',
-        'channel_en_category',
-        'channel_ja_category',
-    ]
 
 
 def load_existing_ids(output_file):
@@ -304,9 +301,7 @@ def process_output_file(output_file, fieldnames):
 def main():
     output_file = "output/dataset.csv"
 
-    fieldnames = get_fieldnames()
-
-    process_output_file(output_file, fieldnames)
+    process_output_file(output_file, FIELDS)
 
     print(f"Wrote CSV to {output_file}")
 
