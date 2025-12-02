@@ -12,6 +12,39 @@ if not HOLODEX_API_KEY:
 hololyzer_url = "https://hololyzer.net"
 holodex_api_url = "https://holodex.net/api/v2"
 
+# Single source of truth for CSV field order and default keys.
+FIELDS = [
+    'video_id',
+    'video_title',
+    'holodex_topic_id',
+    'holodex_published_at',
+    'holodex_available_at',
+    'public_time',
+    'start_time',
+    'end_time',
+    'total_time',
+    'chat_num_total',
+    'chat_num_ja',
+    'chat_num_emoji',
+    'chat_num_en',
+    'uniq_user_num',
+    'uniq_member_num',
+    'total_super_chat_amount_yen',
+    'english_chat_ratio',
+    'member_chat_ratio',
+    'chat_per_second',
+    'max_ccv',
+    'member_num',
+    'member_gift_num_from',
+    'member_gift_num_to',
+    'milestone_num',
+    'channel_id',
+    'channel_en_name',
+    'channel_ja_name',
+    'channel_en_category',
+    'channel_ja_category',
+]
+
 response_string_en = requests.get(hololyzer_url + "/youtube/locales/string_en.json")
 response_string_en.raise_for_status()
 response_string_en.encoding = "utf-8"
@@ -58,33 +91,14 @@ def channels():
     return channels
 
 def get_video_data(holodex_info):
-    data = {
-        'video_id': holodex_info['id'],
-        'video_title': holodex_info['title'],
-        'holodex_type': holodex_info['type'],
-        'holodex_topic_id': holodex_info['type'],
-        'holodex_published_at': holodex_info['published_at'],
-        'holodex_available_at': holodex_info['available_at'],
-        'public_time': '',
-        'start_time': '',
-        'end_time': '',
-        'total_time': '',
-        'chat_num_total': '',
-        'chat_num_ja': '',
-        'chat_num_emoji': '',
-        'chat_num_en': '',
-        'uniq_user_num': '',
-        'uniq_member_num': '',
-        'total_super_chat_amount_yen': '',
-        'english_chat_ratio': '',
-        'member_chat_ratio': '',
-        'chat_per_second': '',
-        'max_ccv': '',
-        'member_num': '',
-        'member_gift_num_from': '',
-        'member_gift_num_to': '',
-        'milestone_num': ''
-    }
+    # initialize all expected fields with empty defaults from FIELDS
+    data = {k: '' for k in FIELDS}
+    # fill holodex-provided metadata
+    data['video_id'] = holodex_info.get('id', '')
+    data['video_title'] = holodex_info.get('title', '')
+    data['holodex_topic_id'] = holodex_info.get('topic_id', '')
+    data['holodex_published_at'] = holodex_info.get('published_at', '')
+    data['holodex_available_at'] = holodex_info.get('available_at', '')
 
     try:
         response = requests.get(f"{hololyzer_url}/youtube/video/{holodex_info['id']}.html")
@@ -247,41 +261,6 @@ def videos_with_data(channel, csv_writer, fieldnames, existing_ids=None):
     # no return; streaming to CSV
 
 
-def get_fieldnames():
-    return [
-        'video_id',
-        'video_title',
-        'holodex_type',
-        'holodex_topic_id',
-        'holodex_published_at',
-        'holodex_available_at',
-        'public_time',
-        'start_time',
-        'end_time',
-        'total_time',
-        'chat_num_total',
-        'chat_num_ja',
-        'chat_num_emoji',
-        'chat_num_en',
-        'uniq_user_num',
-        'uniq_member_num',
-        'total_super_chat_amount_yen',
-        'english_chat_ratio',
-        'member_chat_ratio',
-        'chat_per_second',
-        'max_ccv',
-        'member_num',
-        'member_gift_num_from',
-        'member_gift_num_to',
-        'milestone_num',
-        'channel_id',
-        'channel_en_name',
-        'channel_ja_name',
-        'channel_en_category',
-        'channel_ja_category',
-    ]
-
-
 def load_existing_ids(output_file):
     """Return a set of video_id strings read from existing CSV or empty set."""
     existing_ids = set()
@@ -323,9 +302,7 @@ def process_output_file(output_file, fieldnames):
 def main():
     output_file = "output/dataset.csv"
 
-    fieldnames = get_fieldnames()
-
-    process_output_file(output_file, fieldnames)
+    process_output_file(output_file, FIELDS)
 
     print(f"Wrote CSV to {output_file}")
 
