@@ -1,10 +1,13 @@
-from pprint import pprint
+import csv
+import os
 import requests
 import re
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 
-HOLODEX_API_KEY = "INSERT API KEY HERE"
+HOLODEX_API_KEY = os.getenv("HOLODEX_API_KEY")
+if not HOLODEX_API_KEY:
+    raise ValueError("HOLODEX_API_KEY not found in environment variables")
 
 hololyzer_url = "https://hololyzer.net"
 holodex_api_url = "https://holodex.net/api/v2"
@@ -57,36 +60,25 @@ def channels():
 def get_video_data(video_id):
     data = {
         'video_id': video_id,
-
-        'public_time': None,
-        'start_time': None,
-        'end_time': None,
-
-        'total_time': None,
-
-        'chat_num_total': None,
-        'chat_num_ja': None,
-        'chat_num_emoji': None,
-        'chat_num_en': None,
-
-        'uniq_user_num': None,
-        'uniq_member_num': None,
-
-        'total_super_chat_amount_yen': None,
-
-        'english_chat_ratio': None,
-        'member_chat_ratio': None,
-
-        'chat_per_second': None,
-
-        'max_ccv': None,
-
-        'member_num': None,
-
-        'member_gift_num_from': None,
-        'member_gift_num_to': None,
-
-        'milestone_num': None
+        'public_time': '',
+        'start_time': '',
+        'end_time': '',
+        'total_time': '',
+        'chat_num_total': '',
+        'chat_num_ja': '',
+        'chat_num_emoji': '',
+        'chat_num_en': '',
+        'uniq_user_num': '',
+        'uniq_member_num': '',
+        'total_super_chat_amount_yen': '',
+        'english_chat_ratio': '',
+        'member_chat_ratio': '',
+        'chat_per_second': '',
+        'max_ccv': '',
+        'member_num': '',
+        'member_gift_num_from': '',
+        'member_gift_num_to': '',
+        'milestone_num': ''
     }
 
     try:
@@ -121,26 +113,26 @@ def get_video_data(video_id):
                 if field_type == 'date':
                     string_no_timezone = field.replace("(JST)", "")
 
-                    if not string_no_timezone: return None
+                    if not string_no_timezone: return ''
 
                     dt_naive = datetime.strptime(string_no_timezone.strip(), "%Y/%m/%d %H:%M:%S")
 
                     jst = timezone(timedelta(hours=9))
                     dt_jst = dt_naive.replace(tzinfo=jst)
 
-                    return dt_jst
+                    return dt_jst.isoformat()
                 elif field_type == 'string':
-                    return field if field else None
+                    return field if field else ''
                 elif field_type == 'int':
                     match = re.search(r"\d+", field.replace(',', ''))
-                    return int(match.group()) if match else None
+                    return int(match.group()) if match else ''
                 elif field_type == 'percent':
                     match = re.search(r"[\d\.]+", field.replace(',', ''))
-                    return float(match.group()) / 100 if match else None
+                    return float(match.group()) / 100 if match else ''
                 elif field_type == 'float':
                     match = re.search(r"[\d\.]+", field.replace(',', ''))
-                    return float(match.group()) if match else None
-            else: return None
+                    return float(match.group()) if match else ''
+            else: return ''
 
         for line in lines:
             if line.startswith('公開日時'): data['public_time'] = extract_field('date', line)
@@ -182,9 +174,14 @@ def get_video_data(video_id):
         return data
 
 
-def videos_with_data(channel):
+def videos_with_data(channel, csv_writer, fieldnames, existing_ids=None):
+    """Fetch video ids for channel, stream each video's data into csv_writer.
+
+    csv_writer is expected to be a csv.DictWriter already configured with fieldnames.
+    """
     video_ids = []
 
+    print(f"Fetching video ids from Holodex for channel", channel['en_name'], channel['id'])
     while (True):
         params = {
             "type": "stream",
@@ -204,14 +201,18 @@ def videos_with_data(channel):
             video_ids.append(holodex_video['id'])
 
         if len(holodex_videos) < 50:
+            print(f"Fetched {len(video_ids)} video ids from Holodex for channel", channel['en_name'], channel['id'])
             break
 
-    videos_with_data = [] 
+    existing_ids = existing_ids or set()
 
-    for video_id in video_ids:
-        print(video_id)
-        # videos_with_data.append(get_video_data(video_id))
-
+    total = len(video_ids)
+    for idx, video_id in enumerate(video_ids, start=1):
+        if video_id in existing_ids:
+            # already present in CSV, skip
+            print(f"[{idx}/{total}] Channel: {channel['en_name']} ({channel['id']}) - Video: {video_id} - Skipped (already present)")
+            continue
+        # fetch and build complete data
         complete_data = {
             **get_video_data(video_id),
             'channel_id': channel['id'],
@@ -221,24 +222,93 @@ def videos_with_data(channel):
             'channel_ja_category': channel['ja_category'],
         }
 
-        pprint(complete_data)
+        # prepare a flat mapping for CSV writer following fieldnames order
+        row = { name: complete_data.get(name) for name in fieldnames }
 
-        videos_with_data.append(complete_data)
+        # print channel and id to show progress with counter
+        print(f"[{idx}/{total}] Channel: {channel['en_name']} ({channel['id']}) - Video: {video_id} - Wrote to CSV")
 
-    return videos_with_data
+        csv_writer.writerow(row)
+
+    # no return; streaming to CSV
+
+
+def get_fieldnames():
+    return [
+        'video_id',
+        'public_time',
+        'start_time',
+        'end_time',
+        'total_time',
+        'chat_num_total',
+        'chat_num_ja',
+        'chat_num_emoji',
+        'chat_num_en',
+        'uniq_user_num',
+        'uniq_member_num',
+        'total_super_chat_amount_yen',
+        'english_chat_ratio',
+        'member_chat_ratio',
+        'chat_per_second',
+        'max_ccv',
+        'member_num',
+        'member_gift_num_from',
+        'member_gift_num_to',
+        'milestone_num',
+        'channel_id',
+        'channel_en_name',
+        'channel_ja_name',
+        'channel_en_category',
+        'channel_ja_category',
+    ]
+
+
+def load_existing_ids(output_file):
+    """Return a set of video_id strings read from existing CSV or empty set."""
+    existing_ids = set()
+    if not os.path.exists(output_file):
+        return existing_ids
+
+    try:
+        with open(output_file, 'r', newline='', encoding='utf-8') as readfile:
+            reader = csv.DictReader(readfile)
+            for row in reader:
+                vid = row.get('video_id')
+                if vid:
+                    existing_ids.add(vid)
+    except Exception:
+        # if reading fails for any reason, return empty set so we try all
+        return set()
+
+    return existing_ids
+
+
+def process_output_file(output_file, fieldnames):
+    """Create or append to CSV, streaming video rows and skipping existing ids."""
+    existing_ids = load_existing_ids(output_file)
+
+    if os.path.exists(output_file):
+        with open(output_file, 'a', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            for channel in channels():
+                videos_with_data(channel, writer, fieldnames, existing_ids)
+    else:
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for channel in channels():
+                videos_with_data(channel, writer, fieldnames, existing_ids)
+
 
 def main():
-    dataset = []
+    output_file = "output/dataset.csv"
 
-    # pprint(channels()[-1])
-    #
-    # pprint(videos_with_data(channels()[-1]))
+    fieldnames = get_fieldnames()
 
-    for channel in channels():
-        dataset.extend(videos_with_data(channel))
+    process_output_file(output_file, fieldnames)
 
-    pprint(dataset)
-
+    print(f"Wrote CSV to {output_file}")
 
 
 if __name__ == "__main__":
