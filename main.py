@@ -192,7 +192,7 @@ def videos_with_data(channel, csv_writer, fieldnames, existing_ids=None):
     """
     video_ids = []
 
-    print(f"Fetching videos from Holodex for channel", channel['en_name'], channel['id'])
+    print(f"Fetching video ids from Holodex for channel", channel['en_name'], channel['id'])
     while (True):
         params = {
             "type": "stream",
@@ -212,7 +212,7 @@ def videos_with_data(channel, csv_writer, fieldnames, existing_ids=None):
             video_ids.append(holodex_video['id'])
 
         if len(holodex_videos) < 50:
-            print(f"Fetched {len(video_ids)} videos from Holodex for channel", channel['en_name'], channel['id'])
+            print(f"Fetched {len(video_ids)} video ids from Holodex for channel", channel['en_name'], channel['id'])
             break
 
     def _serialize(v):
