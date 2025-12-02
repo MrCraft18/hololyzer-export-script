@@ -121,10 +121,6 @@ def get_video_data(holodex_info):
         table_text = table_text.replace("\r\n", "\n").strip("\n")
         lines = [line.replace('　', '').strip() for line in table_text.split('\n') if '：' in line]
 
-        # for line in lines: print(line)
-
-        # return
-
         def extract_field(field_type, line):
             if '-' not in line:
                 field = line.split('：')[1]
@@ -187,8 +183,6 @@ def get_video_data(holodex_info):
                     data['member_gift_num_to'] = int(match.group(2))
 
             if line.startswith('マイルストーン'): data['milestone_num'] = extract_field('int', line)
-
-        # print(data)
 
         return data
 
@@ -256,8 +250,6 @@ def videos_with_data(channel, csv_writer, fieldnames, existing_ids=None):
         print(f"[{idx}/{total}] Channel: {channel['en_name']} ({channel['id']}) - Video: {holodex_info['id']} - Wrote to CSV")
 
         csv_writer.writerow(row)
-
-    # no return; streaming to CSV
 
 
 def load_existing_ids(output_file):
