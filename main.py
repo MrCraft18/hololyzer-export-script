@@ -220,10 +220,10 @@ def videos_with_data(channel, csv_writer, fieldnames, existing_ids=None):
             videos_result.append({
                 'id': holodex_video['id'],
                 'title': holodex_video['title'],
-                # topic_id may be missing for some videos
+                # topic_id, published_at, available_at may be missing for some videos
                 'topic_id': holodex_video['topic_id'] if 'topic_id' in holodex_video else None,
-                'published_at': holodex_video['published_at'],
-                'available_at': holodex_video['available_at']
+                'published_at': holodex_video['published_at'] if 'published_at' in holodex_video else None,
+                'available_at': holodex_video['available_at'] if 'available_at' in holodex_video else None,
             })
             
 
