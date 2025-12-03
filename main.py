@@ -253,41 +253,80 @@ def videos_with_data(channel, csv_writer, fieldnames, existing_ids=None):
 
 
 def load_existing_ids(output_file):
-    """Return a set of video_id strings read from existing CSV or empty set."""
+    """Return a tuple (existing_ids_set, counts_by_channel_dict).
+
+    existing_ids_set is a set of video_id strings found in the CSV.
+    counts_by_channel_dict maps channel_id -> count of rows for that channel.
+    If the file doesn't exist or cannot be read, returns (set(), {}).
+    """
     existing_ids = set()
+    counts_by_channel = {}
     if not os.path.exists(output_file):
-        return existing_ids
+        return existing_ids, counts_by_channel
 
     try:
         with open(output_file, 'r', newline='', encoding='utf-8') as readfile:
             reader = csv.DictReader(readfile)
             for row in reader:
                 vid = row.get('video_id')
+                ch = row.get('channel_id')
                 if vid:
                     existing_ids.add(vid)
+                if ch:
+                    counts_by_channel[ch] = counts_by_channel.get(ch, 0) + 1
     except Exception:
-        # if reading fails for any reason, return empty set so we try all
-        return set()
+        # if reading fails for any reason, return empty structures so we try all
+        return set(), {}
 
-    return existing_ids
+    return existing_ids, counts_by_channel
 
 
 def process_output_file(output_file, fieldnames):
     """Create or append to CSV, streaming video rows and skipping existing ids."""
-    existing_ids = load_existing_ids(output_file)
+    existing_ids, counts_by_channel = load_existing_ids(output_file)
 
-    if os.path.exists(output_file):
-        with open(output_file, 'a', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            for channel in channels():
-                videos_with_data(channel, writer, fieldnames, existing_ids)
-    else:
-        os.makedirs(os.path.dirname(output_file), exist_ok=True)
-        with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    # iterate channels and decide whether to skip based on Holodex 'total'
+    channel_list = channels()
+
+    def channel_has_complete_data(ch):
+        """Return True if Holodex reports the same total as our existing count for this channel.
+
+        If anything goes wrong while querying Holodex or the response doesn't include a 'total',
+        return False so the channel will be processed.
+        """
+        try:
+            params = {"type": "stream", "paginated": "true"}
+            headers = {"X-APIKEY": HOLODEX_API_KEY}
+            resp = requests.get(f"{holodex_api_url}/channels/{ch['id']}/videos", params=params, headers=headers)
+            resp.raise_for_status()
+            resp.encoding = 'utf-8'
+            data = resp.json()
+            # data is expected to contain a 'total' field when paginated=true
+            total = data.get('total') if isinstance(data, dict) else None
+            if total is None:
+                return False
+            existing = counts_by_channel.get(ch['id'], 0)
+            return int(total) == int(existing)
+        except Exception:
+            # any error -> do not skip
+            return False
+
+    # ensure output directory exists before possibly opening file
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    # open in append mode if exists (we'll have header already), otherwise write with header
+    mode = 'a' if os.path.exists(output_file) else 'w'
+    with open(output_file, mode, newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if mode == 'w':
             writer.writeheader()
-            for channel in channels():
-                videos_with_data(channel, writer, fieldnames, existing_ids)
+
+        for channel in channel_list:
+            if channel_has_complete_data(channel):
+                print(f"Skipping channel {channel['en_name']} ({channel['id']}) — existing rows match Holodex total")
+                continue
+
+            videos_with_data(channel, writer, fieldnames, existing_ids)
 
 
 def main():
