@@ -195,35 +195,55 @@ def videos_with_data(channel, csv_writer, fieldnames, existing_ids=None):
     videos_result = []
 
     print(f"Fetching video info from Holodex for channel", channel['en_name'], channel['id'])
-    while (True):
-        params = {
-            "type": "stream",
-            "limit": 50,
-            "offset": len(videos_result),
-        }
 
+    # If caller attached a 'last_n' hint to the channel, only fetch that many newest videos
+    last_n = channel.get('last_n') if isinstance(channel.get('last_n'), int) else None
+
+    if last_n is not None:
+        params = {"type": "stream", "limit": last_n, "offset": 0}
         headers = { "X-APIKEY": HOLODEX_API_KEY }
-
         response = requests.get(f"{holodex_api_url}/channels/{channel['id']}/videos", params=params, headers=headers)
         response.raise_for_status()
         response.encoding = "utf-8"
-
         holodex_video_info_response = response.json()
-
         for holodex_video in holodex_video_info_response:
             videos_result.append({
                 'id': holodex_video['id'],
-                'title': holodex_video['title'],
-                # topic_id, published_at, available_at may be missing for some videos
-                'topic_id': holodex_video['topic_id'] if 'topic_id' in holodex_video else None,
-                'published_at': holodex_video['published_at'] if 'published_at' in holodex_video else None,
-                'available_at': holodex_video['available_at'] if 'available_at' in holodex_video else None,
+                'title': holodex_video.get('title'),
+                'topic_id': holodex_video.get('topic_id'),
+                'published_at': holodex_video.get('published_at'),
+                'available_at': holodex_video.get('available_at'),
             })
-            
+        print(f"Fetched {len(videos_result)} (latest) video info from Holodex for channel", channel['en_name'], channel['id'])
+    else:
+        while True:
+            params = {
+                "type": "stream",
+                "limit": 50,
+                "offset": len(videos_result),
+            }
 
-        if len(holodex_video_info_response) < 50:
-            print(f"Fetched {len(videos_result)} video info from Holodex for channel", channel['en_name'], channel['id'])
-            break
+            headers = { "X-APIKEY": HOLODEX_API_KEY }
+
+            response = requests.get(f"{holodex_api_url}/channels/{channel['id']}/videos", params=params, headers=headers)
+            response.raise_for_status()
+            response.encoding = "utf-8"
+
+            holodex_video_info_response = response.json()
+
+            for holodex_video in holodex_video_info_response:
+                videos_result.append({
+                    'id': holodex_video['id'],
+                    'title': holodex_video['title'],
+                    # topic_id, published_at, available_at may be missing for some videos
+                    'topic_id': holodex_video['topic_id'] if 'topic_id' in holodex_video else None,
+                    'published_at': holodex_video['published_at'] if 'published_at' in holodex_video else None,
+                    'available_at': holodex_video['available_at'] if 'available_at' in holodex_video else None,
+                })
+
+            if len(holodex_video_info_response) < 50:
+                print(f"Fetched {len(videos_result)} video info from Holodex for channel", channel['en_name'], channel['id'])
+                break
 
     existing_ids = existing_ids or set()
 
@@ -253,41 +273,84 @@ def videos_with_data(channel, csv_writer, fieldnames, existing_ids=None):
 
 
 def load_existing_ids(output_file):
-    """Return a set of video_id strings read from existing CSV or empty set."""
+    """Return a tuple (existing_ids_set, counts_by_channel_dict).
+
+    existing_ids_set is a set of video_id strings found in the CSV.
+    counts_by_channel_dict maps channel_id -> count of rows for that channel.
+    If the file doesn't exist or cannot be read, returns (set(), {}).
+    """
     existing_ids = set()
+    counts_by_channel = {}
     if not os.path.exists(output_file):
-        return existing_ids
+        return existing_ids, counts_by_channel
 
     try:
         with open(output_file, 'r', newline='', encoding='utf-8') as readfile:
             reader = csv.DictReader(readfile)
             for row in reader:
                 vid = row.get('video_id')
+                ch = row.get('channel_id')
                 if vid:
                     existing_ids.add(vid)
+                if ch:
+                    counts_by_channel[ch] = counts_by_channel.get(ch, 0) + 1
     except Exception:
-        # if reading fails for any reason, return empty set so we try all
-        return set()
+        # if reading fails for any reason, return empty structures so we try all
+        return set(), {}
 
-    return existing_ids
+    return existing_ids, counts_by_channel
 
 
 def process_output_file(output_file, fieldnames):
     """Create or append to CSV, streaming video rows and skipping existing ids."""
-    existing_ids = load_existing_ids(output_file)
+    existing_ids, counts_by_channel = load_existing_ids(output_file)
 
-    if os.path.exists(output_file):
-        with open(output_file, 'a', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            for channel in channels():
-                videos_with_data(channel, writer, fieldnames, existing_ids)
-    else:
-        os.makedirs(os.path.dirname(output_file), exist_ok=True)
-        with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    # iterate channels and decide whether to skip based on Holodex 'total'
+    channel_list = channels()
+
+    # helper: query Holodex paginated total for a channel. Returns int or None
+    def holodex_total_for_channel(ch):
+        try:
+            params = {"type": "stream", "paginated": "true"}
+            headers = {"X-APIKEY": HOLODEX_API_KEY}
+            resp = requests.get(f"{holodex_api_url}/channels/{ch['id']}/videos", params=params, headers=headers)
+            resp.raise_for_status()
+            resp.encoding = 'utf-8'
+            data = resp.json()
+            # expected top-level 'total' when paginated=true
+            if isinstance(data, dict) and 'total' in data:
+                return int(data['total'])
+        except Exception:
+            return None
+        return None
+
+    # ensure output directory exists before possibly opening file
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    # open in append mode if exists (we'll have header already), otherwise write with header
+    mode = 'a' if os.path.exists(output_file) else 'w'
+    with open(output_file, mode, newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if mode == 'w':
             writer.writeheader()
-            for channel in channels():
-                videos_with_data(channel, writer, fieldnames, existing_ids)
+
+        for channel in channel_list:
+            existing_count = counts_by_channel.get(channel['id'], 0)
+            total = holodex_total_for_channel(channel)
+
+            # If Holodex reported total and it's less/equal to our existing rows, skip
+            if total is not None and existing_count >= total:
+                print(f"Skipping channel {channel['en_name']} ({channel['id']}) — existing rows ({existing_count}) >= Holodex total ({total})")
+                continue
+
+            # If channel already has rows and is within 50 of Holodex total, only fetch latest 50
+            if total is not None and existing_count > 0 and (total - existing_count) <= 50:
+                channel['last_n'] = 50
+                print(f"Partial update for channel {channel['en_name']} ({channel['id']}): fetching latest 50 (missing {total - existing_count})")
+            else:
+                channel['last_n'] = None
+
+            videos_with_data(channel, writer, fieldnames, existing_ids)
 
 
 def main():
